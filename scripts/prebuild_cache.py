@@ -20,13 +20,34 @@
 """
 
 import json
-import os
 import requests
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 SERVICE_REFERENCE_URL = 'https://servicereference.us-east-1.amazonaws.com/'
 REQUEST_TIMEOUT = 10
+MAX_WORKERS = 20
+
+
+def fetch_service_operations(service_name: str, service_url: str, operations_dir: Path) -> bool:
+    """서비스별 읽기 전용 작업 목록을 가져와 캐시 파일로 저장한다."""
+    try:
+        svc_resp = requests.get(service_url, timeout=REQUEST_TIMEOUT)
+        svc_resp.raise_for_status()
+        svc_data = svc_resp.json()
+        read_only_ops = [
+            action['Name']
+            for action in svc_data.get('Actions', [])
+            if not action.get('Annotations', {}).get('Properties', {}).get('IsWrite', True)
+        ]
+        svc_file = operations_dir / f'{service_name}.json'
+        with open(svc_file, 'w') as f:
+            json.dump(read_only_ops, f)
+        return True
+    except Exception as e:
+        print(f'  WARNING: Failed to cache {service_name}: {e}', file=sys.stderr)
+        return False
 
 
 def main():
@@ -50,28 +71,21 @@ def main():
         json.dump(service_list, f)
     print(f'Cached {len(service_list)} service references -> {ref_file}')
 
-    # 2. 각 서비스별 읽기 전용 작업 목록 가져오기
+    # 2. 각 서비스별 읽기 전용 작업 목록을 병렬로 가져오기
     success = 0
     failed = 0
-    for svc in service_list:
-        service_name = svc['service']
-        service_url = svc['url']
-        try:
-            svc_resp = requests.get(service_url, timeout=REQUEST_TIMEOUT)
-            svc_resp.raise_for_status()
-            svc_data = svc_resp.json()
-            read_only_ops = [
-                action['Name']
-                for action in svc_data.get('Actions', [])
-                if not action.get('Annotations', {}).get('Properties', {}).get('IsWrite', True)
-            ]
-            svc_file = operations_dir / f'{service_name}.json'
-            with open(svc_file, 'w') as f:
-                json.dump(read_only_ops, f)
-            success += 1
-        except Exception as e:
-            print(f'  WARNING: Failed to cache {service_name}: {e}', file=sys.stderr)
-            failed += 1
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = {
+            executor.submit(
+                fetch_service_operations, svc['service'], svc['url'], operations_dir
+            ): svc['service']
+            for svc in service_list
+        }
+        for future in as_completed(futures):
+            if future.result():
+                success += 1
+            else:
+                failed += 1
 
     print(f'Done: {success} services cached, {failed} failed')
 

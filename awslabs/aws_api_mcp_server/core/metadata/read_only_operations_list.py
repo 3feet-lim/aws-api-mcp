@@ -66,27 +66,23 @@ class ServiceReferenceUrlsByService(dict):
     def __init__(self):
         """Initialize the urls by service map.
 
-        외부 URL 호출을 시도하고, 성공 시 로컬 캐시에 저장한다.
-        실패 시 로컬 캐시 파일이 있으면 그것을 사용한다.
+        로컬 캐시를 우선 사용하고, 캐시가 없을 때만 외부 URL을 호출한다.
         """
         super().__init__()
+        # 로컬 캐시 우선
+        if self._load_cache():
+            logger.info('Service reference loaded from local cache')
+            return
+        # 캐시가 없으면 외부 호출
         try:
             response = requests.get(SERVICE_REFERENCE_URL, timeout=DEFAULT_REQUEST_TIMEOUT).json()
             for service_reference in response:
                 self[service_reference['service']] = service_reference['url']
-            # 외부 호출 성공 시 로컬 캐시에 저장
             self._save_cache(response)
             logger.info('Service reference loaded from remote and cached locally')
         except Exception as e:
-            logger.warning(f'Failed to retrieve service reference from remote: {e}')
-            # 로컬 캐시 파일에서 로드 시도
-            if self._load_cache():
-                logger.info('Service reference loaded from local cache')
-            else:
-                logger.error('No local cache available for service reference')
-                raise RuntimeError(
-                    f'Error retrieving the service reference document and no local cache found: {e}'
-                )
+            logger.error(f'Error retrieving the service reference document: {e}')
+            raise RuntimeError(f'Error retrieving the service reference document: {e}')
 
     def _save_cache(self, response: list):
         """외부 호출 결과를 로컬 캐시 파일에 저장한다."""
@@ -148,11 +144,21 @@ class ReadOnlyOperations(dict):
     def _cache_ready_only_operations_for_service(self, service: str):
         """서비스별 읽기 전용 작업 목록을 가져온다.
 
-        외부 URL 호출을 시도하고, 성공 시 로컬 캐시에 저장한다.
-        실패 시 로컬 캐시 파일이 있으면 그것을 사용한다.
+        로컬 캐시를 우선 사용하고, 캐시가 없을 때만 외부 URL을 호출한다.
         """
         cache_file = SERVICE_OPERATIONS_CACHE_DIR / f'{service}.json'
 
+        # 로컬 캐시 우선
+        if cache_file.exists():
+            try:
+                with open(cache_file, 'r') as f:
+                    self[service] = json.load(f)
+                logger.info(f'Service operations for {service} loaded from local cache')
+                return
+            except Exception as e:
+                logger.warning(f'Failed to load service operations cache for {service}: {e}')
+
+        # 캐시가 없으면 외부 호출
         try:
             response = requests.get(
                 self._service_reference_urls_by_service[service], timeout=DEFAULT_REQUEST_TIMEOUT
@@ -161,30 +167,12 @@ class ReadOnlyOperations(dict):
             for action in response['Actions']:
                 if not action['Annotations']['Properties']['IsWrite']:
                     self[service].append(action['Name'])
-            # 외부 호출 성공 시 로컬 캐시에 저장
             self._save_service_cache(service, self[service])
         except Exception as e:
-            logger.warning(
-                f'Failed to retrieve service operations from remote for {service}: {e}'
+            logger.error(f'Error retrieving the service reference document for {service}: {e}')
+            raise RuntimeError(
+                f'Error retrieving the service reference document for {service}: {e}'
             )
-            # 로컬 캐시 파일에서 로드 시도
-            if cache_file.exists():
-                try:
-                    with open(cache_file, 'r') as f:
-                        self[service] = json.load(f)
-                    logger.info(f'Service operations for {service} loaded from local cache')
-                except Exception as cache_e:
-                    logger.error(f'Failed to load service operations cache for {service}: {cache_e}')
-                    raise RuntimeError(
-                        f'Error retrieving the service reference document for {service} '
-                        f'and failed to load local cache: {e}'
-                    )
-            else:
-                logger.error(f'No local cache available for service operations: {service}')
-                raise RuntimeError(
-                    f'Error retrieving the service reference document for {service} '
-                    f'and no local cache found: {e}'
-                )
 
     @staticmethod
     def _save_service_cache(service: str, operations: list):
