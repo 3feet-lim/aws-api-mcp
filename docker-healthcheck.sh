@@ -15,8 +15,8 @@
 
 SERVER="aws-api-mcp-server"
 
-# 서버 프로세스가 실행 중인지 확인
-if pgrep -f "awslabs.$SERVER" > /dev/null; then
+# Check if the server process is running
+if pgrep -P 0 -a -l -x -f "/app/.venv/bin/python3? /app/.venv/bin/awslabs.$SERVER" > /dev/null; then
   echo -n "$SERVER is running";
   exit 0;
 fi;
