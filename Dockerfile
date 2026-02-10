@@ -79,8 +79,8 @@ COPY --from=uv --chown=app:app /root/.local /root/.local
 COPY --from=uv --chown=app:app /app/.venv /app/.venv
 COPY --from=uv --chown=app:app /app/cache /app/cache
 
-# Get healthcheck script
-COPY ./docker-healthcheck.sh /usr/local/bin/docker-healthcheck.sh
+# 헬스체크 스크립트 복사 및 실행 권한 부여
+COPY --chmod=755 ./docker-healthcheck.sh /usr/local/bin/docker-healthcheck.sh
 
 # Run as non-root
 USER app
